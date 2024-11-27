@@ -1,5 +1,7 @@
 import abc
+import argparse
 import dataclasses
+import io
 import os
 import os.path
 import re
@@ -25,7 +27,7 @@ class BufferWriter(Writer):
 
     def __init__(self):
 
-        self._parts:list[str] = []
+        self._parts:list[str] = list()
         self._whole:str       = ''
 
     @typing.override
@@ -56,58 +58,100 @@ class ProcessingInstruction:
         if self.abort_if is None: 
            self.abort_if = lambda fcontent: False
 
-def do_it(fn :str,
-          pis:typing.Iterable[ProcessingInstruction],
-          enc:str='utf-8'):
+class Processor:
 
-    with open(fn, mode='r', encoding=enc) as f:
+    def __init__(self, pis:typing.Iterable[ProcessingInstruction]):
 
-        original = f.read()
-    
-    def generated(expr:str) -> str:
+        self._pis = pis
 
-        pp = BufferWriter()
-        owd = os.getcwd()
-        os.chdir(os.path.join(*(os.path.split(os.path.abspath(fn))[:-1])))
-        try:
+    def __call__(self, file_getter :typing.Callable[[],io.TextIOWrapper],
+                       ofile_getter:typing.Callable[[],io.TextIOWrapper]|None=None):
 
-            sys.path.append(os.getcwd())
-            exec(expr.replace('\\/', '/'), {
+        pis = self._pis
+        f   = file_getter()
+        raw = f.read()
+        f.close()
+        
+        def generated(expr:str) -> str:
+
+            pp = BufferWriter()
+            owd = os.getcwd()
+            os.chdir(os.path.join(*(os.path.split(os.path.abspath(file_getter))[:-1])))
+            try:
+
+                sys.path.append(os.getcwd())
+                exec(expr.replace('\\/', '/'), {
+                    
+                    **globals(),
+                    'write'     :pp.write,
+                    'writeline' :pp.writeline,
+                    'writelines':pp.writelines,
                 
-                **globals(),
-                'write'     :pp.write,
-                'writeline' :pp.writeline,
-                'writelines':pp.writelines,
+                })
+                sys.path.pop()
             
-            })
-            sys.path.pop()
-        
-        finally:
+            finally:
 
-            os.chdir(owd)
-        
-        return pp.build()
-
-    pprocessed = original
-    pis_done:list[ProcessingInstruction] = list()
-    for pi in pis:
-
-        if pi.abort_if(original): 
+                os.chdir(owd)
             
-            continue
+            return pp.build()
 
-        def replf(m:re.Match[str]):
+        in_process = raw
+        pis_done:list[ProcessingInstruction] = list()
+        for pi in pis:
 
-            return (lambda input: pi.repl(generated(pi.descape(input)),m))(pi.capture(m))
+            if pi.abort_if(raw): 
+                
+                continue
 
-        pprocessed = re.sub(pattern=pi.pattern, 
-                            repl   =replf, 
-                            string =pprocessed, 
-                            flags  =re.DOTALL)
-        pis_done.append(pi)
+            def replf(m:re.Match[str]):
 
-    with open(fn, mode='w', encoding=enc) as f:
+                return (lambda input: pi.repl(generated(pi.descape(input)),m))(pi.capture(m))
 
-        f.write(pprocessed)
-    
-    return pis_done
+            in_process = re.sub(pattern=pi.pattern, 
+                                repl   =replf, 
+                                string =in_process, 
+                                flags  =re.DOTALL)
+            pis_done.append(pi)
+
+        of = ofile_getter()
+        of.write(in_process)
+        of.close()        
+        return pis_done
+
+    def by_name (self, file_name :str,
+                       encoding  :str|None=None,
+                       ofile_name:str|None=None):
+        
+        opener = lambda fn,mode='r': (lambda: open(fn, mode=mode, encoding=encoding))
+        return self.__call__(file_getter =opener(file_name),
+                             ofile_getter=opener(ofile_name if ofile_name is not None else \
+                                                 file_name, mode='w'))
+
+def main(pp:Processor, 
+         ap:argparse.ArgumentParser):
+
+    class A:
+
+        FILE_PATH        = 'f'
+        ENCODING         = 'enc'
+        OUTPUT_FILE_PATH = 'fo'
+
+    ap.add_argument(f'{A.FILE_PATH}',
+                    help   ='file path (input)')
+    ap.add_argument(f'--{A.ENCODING}',
+                    help   ='file encoding')
+    ap.add_argument(f'--{A.OUTPUT_FILE_PATH}',
+                    help   ='file path (output)\nIf omitted, the input file is processed in-place.')
+    get = ap.parse_args().__getattribute__
+    pp.by_name(file_name =get(A.FILE_PATH),
+               encoding  =get(A.ENCODING),
+               ofile_name=get(A.OUTPUT_FILE_PATH))
+
+def simple_argparser(lang:str):
+
+    return argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter,
+                                   description   =f'pre-processor for {lang} files')
+
+def main_simple(pp  :Processor,
+                lang:str): main(pp, simple_argparser(lang))
