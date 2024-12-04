@@ -1,7 +1,10 @@
 import re
 import typing
 
-from jl95terceira.pytools import pp
+if __name__ == '__main__': # business as usual
+    import pp 
+else: # running in unittest or other
+    from . import pp 
 
 REGEX         = 'PPHTML'
 SAFE_REGEX    = f'{REGEX}98006097C52D49A0961609C7E687AF2B'

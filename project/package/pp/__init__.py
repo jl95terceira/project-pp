@@ -65,7 +65,8 @@ class Processor:
         self._pis = pis
 
     def __call__(self, file_getter :typing.Callable[[],io.TextIOWrapper],
-                       ofile_getter:typing.Callable[[],io.TextIOWrapper]|None=None):
+                       ofile_getter:typing.Callable[[],io.TextIOWrapper]|None=None,
+                       working_dir :str                                 |None=None):
 
         pis = self._pis
         f   = file_getter()
@@ -75,8 +76,8 @@ class Processor:
         def generated(expr:str) -> str:
 
             pp = BufferWriter()
-            owd = os.getcwd()
-            os.chdir(os.path.join(*(os.path.split(os.path.abspath(file_getter))[:-1])))
+            original_wd = os.path.abspath(os.getcwd())
+            os.chdir(working_dir)
             try:
 
                 sys.path.append(os.getcwd())
@@ -92,7 +93,7 @@ class Processor:
             
             finally:
 
-                os.chdir(owd)
+                os.chdir(original_wd)
             
             return pp.build()
 
@@ -126,7 +127,8 @@ class Processor:
         opener = lambda fn,mode='r': (lambda: open(fn, mode=mode, encoding=encoding))
         return self.__call__(file_getter =opener(file_name),
                              ofile_getter=opener(ofile_name if ofile_name is not None else \
-                                                 file_name, mode='w'))
+                                                 file_name, mode='w'),
+                             working_dir =os.path.split(os.path.abspath(file_name))[0])
 
 def main(pp:Processor, 
          ap:argparse.ArgumentParser):
